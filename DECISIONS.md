@@ -82,64 +82,100 @@ Hand [Ace, 6, 5] = 12 (Ace recounted as 1, because 11+6+5=22 would bust)
 
 ### Main Server (`src/server/server.py`)
 
+**Status**: ✅ IMPLEMENTED
+
 **What it does:**
-The server entry point. It sets up two sockets: one for UDP broadcasting (telling the world it exists) and one for TCP listening (accepting client connections). As clients connect, we spawn a new thread to handle each one.
+The server entry point. Creates two sockets (TCP for gameplay, UDP for discovery), starts a broadcaster thread, then loops accepting client connections. Each client gets its own game handler thread.
 
 **Why this design:**
-The server needs to do two things simultaneously: broadcast "I'm here!" to potential clients, and handle game sessions with connected clients. Threading solves this - the broadcaster runs in a background thread and doesn't block the main TCP accept loop.
+Threading allows multiple clients to play simultaneously. The main thread blocks on `accept()` waiting for connections. The broadcaster thread runs in background sending offers every 1 second. When a client connects, we spawn a new handler thread—doesn't block other clients.
 
-**Key concepts:**
-- TCP port is chosen dynamically by the OS (bind to 0 means "any available port"), then reported in the offer message
-- Each client connection gets its own thread so multiple games can run at once
-- UDP runs on a separate thread (daemon) so if the server crashes, it dies too
+**Key decisions:**
+- **Port selection**: Bind to port 0 = let OS choose any available port. Then report this port in offers. Why? Avoids conflicts if multiple servers run on same machine. Each server gets its own port. The broadcast offer tells clients which port to connect to.
+- **Bind to 0.0.0.0**: Accept connections from any network interface, not just localhost
+- **SO_REUSEADDR**: Allow restarting server quickly without "address already in use" error
+- **Listen backlog of 5**: Queue up to 5 pending connections (if server is busy, clients wait in queue, not dropped)
+- **Daemon broadcaster**: If broadcaster crashes, server doesn't crash. If main thread exits, broadcaster dies with it.
+- **IP discovery**: We use a trick (connect to 8.8.8.8) to discover our local IP address. We print this so clients know what IP to connect to. The broadcast also includes this.
 
-**Trade-off:** Threading is more complex than single-threaded, but necessary for concurrent games. An async approach would be even more scalable but overkill for this assignment.
+**What happens:**
+```
+1. Print "Server started, listening on IP X.X.X.X"
+2. Broadcast thread starts, sends offers every 1s
+3. Main thread waits for client connections
+4. Client connects -> spawn GameHandler thread
+5. Repeat step 4
+6. On Ctrl+C, close sockets and wait for games to finish
+```
+
+**Trade-off**: Thread-per-client is simpler than async/await but uses more memory. For hackathon scale (maybe 20 clients), fine. Production would use async.
 
 ---
 
 ### Offer Broadcaster (`src/server/offer_broadcaster.py`)
 
+**Status**: ✅ IMPLEMENTED
+
 **What it does:**
-Continuously broadcasts "Hey, I'm a blackjack server!" messages via UDP every second. Clients listen for these to discover available servers.
+Runs in a background thread, encoding and broadcasting the offer message every 1 second via UDP to all devices on the local network.
 
 **Why this design:**
-Clients need to find the server without knowing the IP address. Broadcasting on a well-known port (13122) lets any client on the network hear the announcement. The server doesn't need to know which clients exist - it just keeps announcing.
+Clients need to know the server exists and where to connect. Broadcasting is the simplest discovery mechanism—server announces, clients listen. No need for DNS, multicast, or central registry.
 
-**Key concepts:**
-- UDP broadcast address is `255.255.255.255` - this reaches all devices on the local network
-- The offer includes the TCP port (which changes each run since we let the OS choose)
-- Broadcasts every 1 second per spec requirement (not configurable)
-- Runs as a daemon thread so it doesn't prevent the program from exiting
+**Key decisions:**
+- **UDP socket with SO_BROADCAST**: Required to send to 255.255.255.255
+- **Port 13122**: Hardcoded in spec. All clients listen here. All servers broadcast here. Collision of broadcasts is fine—clients get multiple offers and pick one.
+- **1-second interval**: Per spec. If clients join but don't immediately see offer, they wait at most 1 second for next one.
+- **Infinite loop**: Broadcaster keeps running until told to stop. Server can be running for hours.
+- **Exception handling**: If one broadcast fails (network hiccup), don't crash. Sleep 1 second and retry. Resilient.
 
-**Trade-off:** Broadcasting is less scalable than multicast but simpler and works across subnets. Could lower the 1-second interval for faster discovery but 1s is fine for this.
+**Implementation insight:**
+The broadcaster thread is completely independent. It doesn't know about game logic or client connections. It just encodes and sends the same offer message 60 times per minute forever. This separation means broadcaster never blocks game handlers, and vice versa.
 
 ---
 
 ### Game Handler (`src/server/game_handler.py`)
 
+**Status**: ✅ IMPLEMENTED
+
 **What it does:**
-Manages one client's entire game session. Handles the round-by-round flow: dealing cards, receiving player decisions (Hit/Stand), executing dealer logic, determining winners, and reporting results.
+Manages one client's entire game session (all their rounds). Receives request, plays each round, sends results, then closes.
 
 **Why this design:**
-Each client is independent. Rather than having the main server logic handle every client state, we spawn a separate handler for each one. The handler is responsible for one client's game from start to finish.
+Each client is independent. Putting round logic in a separate class makes it easy to reason about. Threading means multiple handlers run simultaneously without interfering.
 
-**Key concepts:**
-- Receives request message first (tells us how many rounds the client wants to play)
-- Main loop: for each round, deal cards → player turn → dealer turn → calculate winner → send result
-- Player turn: repeatedly ask for Hit/Stand until they stand or bust
-- Dealer turn: automatically hit until >= 17
-- Keeps track of each player's win/loss/tie for final stats
+**Round flow (what happens per round):**
+```
+1. Create fresh deck
+2. Deal 2 cards to player, 2 to dealer
+3. Send player's cards + dealer's first card (second is hidden)
+4. Player turn loop:
+   - Receive Hit/Stand decision from client
+   - If Hit: draw card, send it, check bust
+   - If Stand: exit loop
+5. Dealer turn loop:
+   - Reveal dealer's hidden card
+   - Auto-play until >= 17 or bust
+   - Send each card to player
+6. Determine winner (bust loses, compare totals, etc)
+7. Send result code (0x1=tie, 0x2=loss, 0x3=win)
+```
 
-**The flow looks like:**
-1. Client connects, sends "I want to play 5 rounds"
-2. For each of the 5 rounds:
-   - Deal cards
-   - Get player decisions
-   - Run dealer logic
-   - Send result (win/loss/tie)
-3. Close connection
+**Key decisions:**
+- **Fresh deck per round**: Could reuse and reshuffle, but fresh is simpler. Avoids state tracking bugs.
+- **Reveal hidden card during dealer turn**: Transparency for player. They see dealer's logic unfold.
+- **Dealer plays automatically**: No decisions, just "if < 17 hit, else stand". No randomness, no strategy. Removes ambiguity.
+- **Send cards incrementally**: After each hit, immediately send the card. Don't buffer. This matches the protocol: each message is one card. Keeps client in sync.
+- **Result codes (0x1/0x2/0x3)**: Fixed per spec. Client knows exactly what these mean. No string parsing required.
 
-**Trade-off:** Per-client threads use more memory than a state machine approach, but the code is much simpler to understand and less error-prone.
+**Error handling:**
+- **struct.error**: Malformed message from client. Log and disconnect.
+- **ConnectionError**: Client hung up. Log and disconnect.
+- **Timeout**: If client takes more than 5 seconds to respond, socket timeout triggers.
+- **Graceful close**: Finally block closes socket, but doesn't crash server.
+
+**Statistics tracking:**
+Simple counters (wins/losses/ties). Printed when client disconnects. Helps verify game logic is working.
 
 ---
 

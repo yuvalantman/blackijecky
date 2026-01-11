@@ -313,15 +313,6 @@ def decode_payload_result(data):
     result_code = struct.unpack('!B', data[:1])[0]
     return result_code
     
-    Returns:
-        bytes: Encoded message
-    """
-    name_bytes = team_name.encode('utf-8')[:TEAM_NAME_LENGTH]
-    name_bytes = name_bytes + b'\x00' * (TEAM_NAME_LENGTH - len(name_bytes))
-    
-    msg = struct.pack('!IBB', MAGIC_COOKIE, MSG_TYPE_REQUEST, num_rounds)
-    msg += name_bytes
-    return msg
 
 
 def decode_request(data):
