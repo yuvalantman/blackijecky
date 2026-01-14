@@ -132,12 +132,13 @@ class GameClient:
     def send_decision(self, decision: str) -> bool:
         """
         Send player's decision as a SPEC payload (14 bytes).
-        encode_payload_player_decision() must build:
-        cookie+type(0x4)+decision(5)+result(1 dummy)+card(3 dummy)
+        Format: cookie(4) + type(1) + decision(5) + result(1) + card(3)
         """
         try:
-            msg = encode_payload_player_decision(decision)
-            self.socket.sendall(msg)
+            decision_bytes = encode_payload_player_decision(decision)
+            # Build complete 14-byte payload
+            payload = struct.pack("!IB", MAGIC_COOKIE, MSG_TYPE_PAYLOAD) + decision_bytes + b"\x00\x00\x00\x00"
+            self.socket.sendall(payload)
             return True
         except Exception as e:
             print(f"Failed to send decision: {e}")
@@ -172,6 +173,7 @@ class GameClient:
                     # After a decision, server may send multiple payloads:
                     # - cards (for hit: player card; for stand: dealer cards)
                     # - a final payload with result_code != 0x0
+                    round_finished = False
                     while True:
                         result_code, card = self._read_payload()
 
@@ -180,10 +182,18 @@ class GameClient:
                             if decision.lower() == "hit":
                                 player_cards.append(card)
                                 game_handler.show_card(card, is_player=True)
-                                # continue to read: server might immediately finish (bust) or wait for next decision
-                                # We'll decide whether to stop reading now:
-                                # In most flows: exactly one card for hit, then client chooses again.
-                                break
+                                # Check for immediate bust after hit
+                                from src.common.game_logic import calculate_hand_value, is_bust
+                                if is_bust(calculate_hand_value(player_cards)):
+                                    # Player busted - server sends final result next
+                                    result_code, _ = self._read_payload()
+                                    self._update_stats_if_finished(result_code)
+                                    game_handler.show_result(result_code, player_cards, dealer_cards)
+                                    round_finished = True
+                                    break
+                                else:
+                                    # Not busted, continue to next decision
+                                    break
                             else:
                                 dealer_cards.append(card)
                                 game_handler.show_card(card, is_player=False)
@@ -193,10 +203,11 @@ class GameClient:
                         # result_code != 0x0 means round finished
                         self._update_stats_if_finished(result_code)
                         game_handler.show_result(result_code, player_cards, dealer_cards)
+                        round_finished = True
                         break  # stop reading payloads for this round
-
+                    
                     # If round finished, exit to next round
-                    if result_code != 0x0:
+                    if round_finished:
                         break
 
             return True

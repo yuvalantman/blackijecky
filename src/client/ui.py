@@ -151,7 +151,6 @@ def show_result(result_code, player_cards=None, dealer_cards=None):
     }
     
     result_str = results.get(result_code, "Unknown result")
-    print(f"\nRound result: {result_str}")
     
     # Show detailed hand info if provided
     if player_cards and dealer_cards:
@@ -170,8 +169,17 @@ def show_result(result_code, player_cards=None, dealer_cards=None):
         player_hand_str = ", ".join(display_card(c) for c in player_cards)
         dealer_hand_str = ", ".join(display_card(c) for c in dealer_cards)
         
-        print(f"  Player: {player_hand_str} ({player_value})")
-        print(f"  Dealer: {dealer_hand_str} ({dealer_value})")
+        # Check if player busted
+        if player_value > 21:
+            print(f"\nRound result: BUST - You busted!")
+            print(f"  Player: {player_hand_str} ({player_value})")
+            print(f"  Dealer: {dealer_hand_str} ({dealer_value})")
+        else:
+            print(f"\nRound result: {result_str}")
+            print(f"  Player: {player_hand_str} ({player_value})")
+            print(f"  Dealer: {dealer_hand_str} ({dealer_value})")
+    else:
+        print(f"\nRound result: {result_str}")
 
 
 def show_round_header(round_num, total_rounds):
