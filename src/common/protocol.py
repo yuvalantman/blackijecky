@@ -275,40 +275,17 @@ def decode_payload_player_decision(data):
         raise ValueError(f"Invalid decision in payload: {decision_bytes}")
 
 
-def encode_payload_result(result_code):
+def encode_payload_card(rank, suit):
     """
-    Encode round result for payload message (1 byte).
-    
-    Result codes:
-    - 0x0: Round still in progress
-    - 0x1: Tie (equal totals)
-    - 0x2: Loss (dealer won)
-    - 0x3: Win (player won)
-    
-    Args:
-        result_code (int): One of the result constants (0x0-0x3)
-    
-    Returns:
-        bytes: Single byte
+    Card is 3 bytes:
+    - rank: 2 bytes (01-13) big-endian
+    - suit: 1 byte (0-3)
     """
-    return struct.pack('!B', result_code)
+    return struct.pack('!HB', rank, suit)
 
+def decode_payload_card(data):
+    if len(data) < 3:
+        raise ValueError(f"Card data too short: got {len(data)} bytes, need 3")
+    rank, suit = struct.unpack('!HB', data[:3])
+    return rank, suit
 
-def decode_payload_result(data):
-    """
-    Decode round result from payload message.
-    
-    Args:
-        data (bytes): At least 1 byte
-    
-    Returns:
-        int: Result code (0x0-0x3)
-    
-    Raises:
-        ValueError: If data too short
-    """
-    if len(data) < 1:
-        raise ValueError("Result data missing")
-    
-    result_code = struct.unpack('!B', data[:1])[0]
-    return result_code
