@@ -142,6 +142,11 @@ class GameHandler:
         
         result = determine_winner(player_value, dealer_value, player_busted, dealer_busted)
         
+        # Log game outcome
+        player_hand_str = " ".join(f"{c.rank}{c.suit}" for c in player_hand)
+        dealer_hand_str = " ".join(f"{c.rank}{c.suit}" for c in dealer_hand)
+        print(f"[ROUND END] Player: {player_hand_str} (value={player_value}) vs Dealer: {dealer_hand_str} (value={dealer_value}) -> {result.upper()}")
+        
         # Send result code to client
         if result == "win":
             self._send_result(RESULT_WIN)
@@ -157,7 +162,7 @@ class GameHandler:
         """
         Send a card to the client as a payload message.
         
-        Format: magic cookie (4) + type 0x4 (1) + card_rank (2) + card_suit (1) = 8 bytes
+        Format: magic cookie (4) + type 0x4 (1) + card_rank (1) + card_suit (1) + pad (1) = 8 bytes
         """
         card_data = encode_payload_card(card.rank, card.suit)
         # Construct full payload: magic cookie + type + card
@@ -168,7 +173,7 @@ class GameHandler:
         """
         Wait for player to send Hit or Stand decision.
         
-        Expected format: 5 bytes ("Hittt" or "Stand")
+        Expected format: 5 bytes ("Hittt" or "Stand") - bare, no magic cookie wrapper
         """
         decision_data = self.socket.recv(5)
         if not decision_data:
@@ -183,7 +188,8 @@ class GameHandler:
         Args:
             result_code: 0x1=tie, 0x2=loss, 0x3=win
         """
-        result_msg = encode_payload_result(result_code)
-        # Construct full payload: magic cookie + type + result
-        payload = struct.pack('!IB', 0xabcddcba, 0x4) + result_msg
+        # encode_payload_result() already returns bytes (struct.pack('!B', result_code))
+        result_bytes = encode_payload_result(result_code)
+        # Construct full payload: magic cookie (4) + type 0x5 (1) + result_bytes (1) + padding (2) = 8 bytes
+        payload = struct.pack('!IB', 0xabcddcba, 0x5) + result_bytes + b'\x00\x00'
         self.socket.sendall(payload)

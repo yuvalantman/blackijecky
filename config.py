@@ -19,9 +19,11 @@ MAGIC_COOKIE = 0xabcddcba
 #   0x2 (offer): Server -> Client, announces availability
 #   0x3 (request): Client -> Server, joins a game session
 #   0x4 (payload): Both directions, game communication (cards, decisions)
+#   0x5 (result): Server -> Client, round result
 MSG_TYPE_OFFER = 0x2       
 MSG_TYPE_REQUEST = 0x3     
 MSG_TYPE_PAYLOAD = 0x4
+MSG_TYPE_RESULT = 0x5
 
 # Result codes in payload messages
 # These tell the client what happened in a round.
@@ -47,11 +49,12 @@ BROADCAST_ADDRESS = "255.255.255.255"
 # If we go shorter, network gets flooded. 1 second is the specified trade-off.
 OFFER_BROADCAST_INTERVAL = 1.0
 
-# Socket timeout: 5 seconds.
-# If a server doesn't respond to our TCP request within 5 seconds, assume it's dead/hung.
+# Socket timeout: 30 seconds.
+# If a server doesn't respond to our TCP request within 30 seconds, assume it's dead/hung.
 # This prevents clients from blocking forever if a server crashes mid-game.
-# Too short = incorrectly timeouts slow networks; too long = user waits forever
-SOCKET_TIMEOUT = 5.0
+# We set this high because during gameplay, a user might take several seconds deciding Hit/Stand.
+# Individual network recv() calls will complete much faster, so 30s is really a max per message.
+SOCKET_TIMEOUT = 30.0
 
 # ============ MESSAGE FORMAT SIZES ============
 # Fixed-length fields make messages predictable in size. This is critical for protocol design:

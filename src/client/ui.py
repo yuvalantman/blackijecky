@@ -135,12 +135,14 @@ def get_player_decision():
             print("Please enter 'h' for Hit or 's' for Stand")
 
 
-def show_result(result_code):
+def show_result(result_code, player_cards=None, dealer_cards=None):
     """
     Display the result of a round.
     
     Args:
         result_code (int): 0x1=tie, 0x2=loss, 0x3=win
+        player_cards (list): Player's hand (optional, for detailed display)
+        dealer_cards (list): Dealer's hand (optional, for detailed display)
     """
     results = {
         0x1: "TIE",
@@ -150,6 +152,26 @@ def show_result(result_code):
     
     result_str = results.get(result_code, "Unknown result")
     print(f"\nRound result: {result_str}")
+    
+    # Show detailed hand info if provided
+    if player_cards and dealer_cards:
+        player_value = sum(c.value() for c in player_cards)
+        aces = sum(1 for c in player_cards if c.rank == 1)
+        while player_value > 21 and aces > 0:
+            player_value -= 10
+            aces -= 1
+        
+        dealer_value = sum(c.value() for c in dealer_cards)
+        aces = sum(1 for c in dealer_cards if c.rank == 1)
+        while dealer_value > 21 and aces > 0:
+            dealer_value -= 10
+            aces -= 1
+        
+        player_hand_str = ", ".join(display_card(c) for c in player_cards)
+        dealer_hand_str = ", ".join(display_card(c) for c in dealer_cards)
+        
+        print(f"  Player: {player_hand_str} ({player_value})")
+        print(f"  Dealer: {dealer_hand_str} ({dealer_value})")
 
 
 def show_round_header(round_num, total_rounds):

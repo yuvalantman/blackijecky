@@ -79,34 +79,37 @@ class GameClient:
         """
         Receive player's initial hand (2 cards) and dealer's first card.
         
+        Each card comes as: magic cookie (4) + type 0x4 (1) + rank (1) + suit (1) + pad (1) = 8 bytes
+        
         Returns:
             tuple: (player_cards, dealer_first_card) where cards are Card objects
                    or (None, None) if error
         """
         try:
-            # Each card is 3 bytes: 2 for rank, 1 for suit
-            # We expect 3 cards: 2 player + 1 dealer
+            # Each payload message is 8 bytes: magic (4) + type (1) + card (3)
+            # We expect 3 such messages: 2 player cards + 1 dealer card
             player_cards = []
             
             # Receive first player card
-            data = self.socket.recv(3)
-            if len(data) < 3:
-                raise ValueError("Incomplete card data")
-            rank, suit = decode_payload_card(data)
+            data = self.socket.recv(8)
+            if len(data) < 8:
+                raise ValueError("Incomplete card payload")
+            # Skip magic cookie and type, just get card data
+            rank, suit = decode_payload_card(data[5:8])
             player_cards.append(Card(rank, suit))
             
             # Receive second player card
-            data = self.socket.recv(3)
-            if len(data) < 3:
-                raise ValueError("Incomplete card data")
-            rank, suit = decode_payload_card(data)
+            data = self.socket.recv(8)
+            if len(data) < 8:
+                raise ValueError("Incomplete card payload")
+            rank, suit = decode_payload_card(data[5:8])
             player_cards.append(Card(rank, suit))
             
             # Receive dealer's first card
-            data = self.socket.recv(3)
-            if len(data) < 3:
-                raise ValueError("Incomplete card data")
-            rank, suit = decode_payload_card(data)
+            data = self.socket.recv(8)
+            if len(data) < 8:
+                raise ValueError("Incomplete card payload")
+            rank, suit = decode_payload_card(data[5:8])
             dealer_card = Card(rank, suit)
             
             return player_cards, dealer_card
@@ -138,57 +141,59 @@ class GameClient:
         Receive response from server after sending decision.
         Could be a card (if we hit) or a result code (if game over).
         
+        Format: magic cookie (4) + type (1) + data (3)
+        - Card: type=0x4, rank (1) + suit (1) + pad (1)
+        - Result: type=0x5, result_code (1) + pad (2)
+        
+        To distinguish: cards have valid ranks 1-13, results are 0x1/0x2/0x3
+        
         Returns:
             dict: {type: "card"|"result", card: Card or code: int}
                   or None if error
         """
         try:
-            # First byte tells us what we're receiving
-            data = self.socket.recv(1)
-            if len(data) < 1:
-                raise ValueError("Empty response")
+            # Read full 8-byte payload
+            data = self.socket.recv(8)
+            if len(data) < 8:
+                raise ValueError("Incomplete payload")
             
-            msg_type = data[0]
+            # Verify magic cookie and type
+            magic = struct.unpack('!I', data[0:4])[0]
+            msg_type = data[4]
             
-            # 0x4 = payload type, next byte tells us specific type
+            if magic != 0xabcddcba:
+                raise ValueError(f"Invalid magic cookie: {hex(magic)}")
+            if msg_type not in [0x4, 0x5]:
+                raise ValueError(f"Invalid message type: {msg_type}")
+            
+            # Extract payload data (last 3 bytes)
+            payload = data[5:8]
+            
+            # Distinguish based on message type, not rank value
             if msg_type == 0x4:
-                # Read next byte to see if it's card or result
-                data = self.socket.recv(1)
-                if len(data) < 1:
-                    raise ValueError("Incomplete payload type")
+                # Card message (type 0x4): rank (1-13) + suit (0-3) + pad (0)
+                rank = payload[0]
+                suit = payload[1]
+                return {
+                    'type': 'card',
+                    'card': Card(rank, suit)
+                }
+            else:  # msg_type == 0x5
+                # Result message (type 0x5): result_code (0x1/0x2/0x3) + pad (0) + pad (0)
+                result_code = payload[0]
                 
-                payload_type = data[0]
+                # Update statistics
+                if result_code == 0x1:
+                    self.ties += 1
+                elif result_code == 0x2:
+                    self.losses += 1
+                elif result_code == 0x3:
+                    self.wins += 1
                 
-                # 0x0 = card (rank/suit follows)
-                if payload_type == 0x0:
-                    card_data = self.socket.recv(3)
-                    if len(card_data) < 3:
-                        raise ValueError("Incomplete card data")
-                    rank, suit = decode_payload_card(card_data)
-                    return {
-                        'type': 'card',
-                        'card': Card(rank, suit)
-                    }
-                
-                # 0x1 or other = result code
-                else:
-                    result_data = self.socket.recv(1)
-                    if len(result_data) < 1:
-                        raise ValueError("Incomplete result")
-                    result_code = result_data[0]
-                    
-                    # Update statistics
-                    if result_code == 0x1:
-                        self.ties += 1
-                    elif result_code == 0x2:
-                        self.losses += 1
-                    elif result_code == 0x3:
-                        self.wins += 1
-                    
-                    return {
-                        'type': 'result',
-                        'code': result_code
-                    }
+                return {
+                    'type': 'result',
+                    'code': result_code
+                }
         
         except Exception as e:
             print(f"Error receiving server response: {e}")
@@ -227,6 +232,8 @@ class GameClient:
             # Show initial state
             game_handler.show_initial_cards(player_cards, dealer_card)
             
+            dealer_cards = [dealer_card]  # Track dealer's cards
+            
             # Player turn loop
             while True:
                 decision = game_handler.get_player_decision()
@@ -235,34 +242,56 @@ class GameClient:
                     game_handler.show_error("Failed to send decision")
                     return False
                 
-                # Receive server response
-                response = self.receive_server_response()
-                if response is None:
-                    game_handler.show_error("Failed to receive server response")
-                    return False
+                # Receive server response (could be card, cards, or result)
+                game_result = None
+                player_busted = False
                 
-                if response['type'] == 'card':
-                    # We hit and got a card
-                    card = response['card']
-                    player_cards.append(card)
-                    game_handler.show_card(card, is_player=True)
+                while True:
+                    response = self.receive_server_response()
+                    if response is None:
+                        game_handler.show_error("Failed to receive server response")
+                        return False
                     
-                    # Check if we bust
-                    hand_value = sum(c.value() for c in player_cards)
-                    aces = sum(1 for c in player_cards if c.rank == 1)
-                    while hand_value > 21 and aces > 0:
-                        hand_value -= 10
-                        aces -= 1
+                    if response['type'] == 'card':
+                        card = response['card']
+                        
+                        if decision.lower() == 'hit':
+                            # Hit: receive one card
+                            player_cards.append(card)
+                            game_handler.show_card(card, is_player=True)
+                            
+                            # Check if we bust after hitting
+                            hand_value = sum(c.value() for c in player_cards)
+                            aces = sum(1 for c in player_cards if c.rank == 1)
+                            while hand_value > 21 and aces > 0:
+                                hand_value -= 10
+                                aces -= 1
+                            
+                            if hand_value > 21:
+                                game_handler.show_bust(is_player=True)
+                                # Player busted - server will send result code next
+                                player_busted = True
+                                # Continue reading to get result code
+                                continue
+                            else:
+                                # Hit but no bust - back to decision loop
+                                break
+                        else:
+                            # Stand: receive dealer cards until result
+                            dealer_cards.append(card)
+                            game_handler.show_card(card, is_player=False)
+                            # Keep reading more responses
+                            continue
                     
-                    if hand_value > 21:
-                        game_handler.show_bust(is_player=True)
-                        break
+                    elif response['type'] == 'result':
+                        # Game over - received result code
+                        game_result = response['code']
+                        game_handler.show_result(game_result, player_cards, dealer_cards)
+                        break  # Exit response loop
                 
-                elif response['type'] == 'result':
-                    # Game over
-                    result_code = response['code']
-                    game_handler.show_result(result_code)
-                    break
+                # If we got a result (bust or stand complete), round is over
+                if game_result is not None:
+                    break  # Exit decision loop to next round
         
         self.close()
         return True

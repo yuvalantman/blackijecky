@@ -49,6 +49,7 @@ class BlackjackServer:
             self.tcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.tcp_socket.bind(('0.0.0.0', 0))  # 0 = any available port
             self.tcp_socket.listen(5)  # Queue up to 5 pending connections
+            self.tcp_socket.settimeout(1.0)  # 1 second timeout on accept() so Ctrl+C works
             
             # Get the actual port we bound to
             self.tcp_port = self.tcp_socket.getsockname()[1]
@@ -92,11 +93,12 @@ class BlackjackServer:
         Main server loop: accept TCP connections and spawn game handlers.
         
         Each client connection gets its own thread so multiple games run concurrently.
+        Socket timeout allows Ctrl+C to interrupt accept() quickly.
         """
         while self.running:
             try:
                 # Accept one client connection
-                # This blocks until a client connects or timeout occurs
+                # Socket timeout (1s) means we check self.running frequently
                 client_socket, client_address = self.tcp_socket.accept()
                 
                 # Spawn a new thread to handle this client's game
@@ -107,6 +109,9 @@ class BlackjackServer:
                 
                 self.handlers.append(handler_thread)
                 
+            except socket.timeout:
+                # Timeout is normal - just loop again and check self.running
+                continue
             except KeyboardInterrupt:
                 break
             except Exception as e:

@@ -178,25 +178,25 @@ def decode_request(data):
 
 def encode_payload_card(rank, suit):
     """
-    Encode card data for a payload message (5 bytes).
+    Encode card data for a payload message (3 bytes).
     
     Card format:
-    - Bytes 0-1: Rank (1-13) encoded as big-endian unsigned short
-    - Byte 2: Suit (0-3) encoded as single byte
+    - Byte 0: Rank (1-13) encoded as single byte
+    - Byte 1: Suit (0-3) encoded as single byte
+    - Byte 2: Reserved/padding (unused, set to 0)
     
-    Why 2 bytes for rank when 1 byte would fit?
-    The spec says "rank encoded 01-13 in first 2 bytes" - unclear why 2 bytes needed
-    for values 1-13, but we follow spec exactly. Better to be over-specified than
-    incompatible with another team's implementation.
+    Why 3 bytes instead of 2?
+    The spec says "Rank encoded 01-13 in first 2 bytes, Suit in second byte"
+    which is ambiguous. Testing shows 3 bytes total works (rank byte + suit byte + pad byte).
     
     Args:
         rank (int): Card rank (1-13)
         suit (int): Card suit (0-3)
     
     Returns:
-        bytes: 3-byte card encoding (2 bytes rank + 1 byte suit)
+        bytes: 3-byte card encoding
     """
-    return struct.pack('!HB', rank, suit)
+    return struct.pack('!BBB', rank, suit, 0)
 
 
 def decode_payload_card(data):
@@ -215,7 +215,7 @@ def decode_payload_card(data):
     if len(data) < 3:
         raise ValueError(f"Card data too short: got {len(data)} bytes, need 3")
     
-    rank, suit = struct.unpack('!HB', data[:3])
+    rank, suit, _ = struct.unpack('!BBB', data[:3])
     return rank, suit
 
 
@@ -312,153 +312,3 @@ def decode_payload_result(data):
     
     result_code = struct.unpack('!B', data[:1])[0]
     return result_code
-    
-
-
-def decode_request(data):
-    """
-    Decode a TCP request message.
-    
-    Args:
-        data (bytes): Raw message data
-    
-    Returns:
-        tuple: (num_rounds, team_name) or None if invalid
-    
-    Raises:
-        ValueError: If message format is invalid
-    """
-    if len(data) < 6:
-        raise ValueError("Request message too short")
-    
-    magic, msg_type, num_rounds = struct.unpack('!IBB', data[:6])
-    
-    if magic != MAGIC_COOKIE:
-        raise ValueError(f"Invalid magic cookie: {hex(magic)}")
-    if msg_type != MSG_TYPE_REQUEST:
-        raise ValueError(f"Wrong message type: {msg_type}")
-    
-    team_name = data[6:6 + TEAM_NAME_LENGTH].rstrip(b'\x00').decode('utf-8', errors='ignore')
-    
-    return num_rounds, team_name
-
-
-def encode_payload_card(card_rank, card_suit):
-    """
-    Encode a payload message with a card (both client→server and server→client).
-    
-    Format:
-    - Magic cookie (4 bytes): 0xabcddcba
-    - Message type (1 byte): 0x4
-    - Card rank (2 bytes): 1-13
-    - Card suit (1 byte): 0-3 (HDCS: Hearts, Diamonds, Clubs, Spades)
-    
-    Args:
-        card_rank (int): 1-13
-        card_suit (int): 0-3
-    
-    Returns:
-        bytes: Encoded message
-    """
-    return struct.pack('!IBHB', MAGIC_COOKIE, MSG_TYPE_PAYLOAD, card_rank, card_suit)
-
-
-def encode_payload_result(result_code):
-    """
-    Encode a payload message with a round result (server→client only).
-    
-    Format:
-    - Magic cookie (4 bytes): 0xabcddcba
-    - Message type (1 byte): 0x4
-    - Result (1 byte): 0x0=not over, 0x1=tie, 0x2=loss, 0x3=win
-    - Padding (2 bytes): 0x00
-    
-    Args:
-        result_code (int): 0x0, 0x1, 0x2, or 0x3
-    
-    Returns:
-        bytes: Encoded message
-    """
-    return struct.pack('!IBBBH', MAGIC_COOKIE, MSG_TYPE_PAYLOAD, result_code, 0, 0)
-
-
-def encode_payload_decision(decision):
-    """
-    Encode a payload message with player decision (client→server only).
-    
-    Format:
-    - Magic cookie (4 bytes): 0xabcddcba
-    - Message type (1 byte): 0x4
-    - Decision (5 bytes): "Hittt" or "Stand" (fixed length, null-padded)
-    
-    Args:
-        decision (str): "Hit" or "Stand"
-    
-    Returns:
-        bytes: Encoded message
-    
-    Raises:
-        ValueError: If decision is not valid
-    """
-    if decision.lower() not in ("hit", "stand"):
-        raise ValueError(f"Invalid decision: {decision}")
-    
-    # Pad decision to 5 bytes
-    if decision.lower() == "hit":
-        decision_bytes = b"Hittt"
-    else:
-        decision_bytes = b"Stand"
-    
-    return struct.pack('!IB', MAGIC_COOKIE, MSG_TYPE_PAYLOAD) + decision_bytes
-
-
-def decode_payload(data):
-    """
-    Decode a payload message. Type depends on context (card, result, or decision).
-    
-    Args:
-        data (bytes): Raw message data (at least 5 bytes)
-    
-    Returns:
-        dict: Payload information with keys depending on type
-        - If card: {'type': 'card', 'rank': int, 'suit': int}
-        - If result: {'type': 'result', 'code': int}
-        - If decision: {'type': 'decision', 'text': str}
-    
-    Raises:
-        ValueError: If message format is invalid
-    """
-    if len(data) < 5:
-        raise ValueError("Payload message too short")
-    
-    magic, msg_type = struct.unpack('!IB', data[:5])
-    
-    if magic != MAGIC_COOKIE:
-        raise ValueError(f"Invalid magic cookie: {hex(magic)}")
-    if msg_type != MSG_TYPE_PAYLOAD:
-        raise ValueError(f"Wrong message type: {msg_type}")
-    
-    # Determine payload type by inspecting the content
-    if len(data) >= 8:
-        # Could be card (rank + suit) or decision (5-byte string)
-        try:
-            rank, suit = struct.unpack('!HB', data[5:8])
-            if 1 <= rank <= 13 and 0 <= suit <= 3:
-                return {'type': 'card', 'rank': rank, 'suit': suit}
-        except:
-            pass
-    
-    # Check for decision string (5 bytes after header)
-    if len(data) >= 10:
-        decision_bytes = data[5:10]
-        decision_str = decision_bytes.decode('utf-8', errors='ignore').rstrip('\x00')
-        if decision_str.lower() in ("hit", "hittt", "stand"):
-            return {'type': 'decision', 'text': decision_str}
-    
-    # Check for result code (1 byte after header)
-    if len(data) >= 6:
-        result_code = struct.unpack('!B', data[5:6])[0]
-        if result_code in (0x0, 0x1, 0x2, 0x3):
-            return {'type': 'result', 'code': result_code}
-    
-    raise ValueError("Cannot determine payload type")

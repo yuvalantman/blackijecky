@@ -49,26 +49,25 @@ class GameSessionHandler:
     
     def get_player_decision(self):
         """Get Hit or Stand decision from player."""
-        print(f"Your hand: {show_hand(self.player_cards, is_player=True)}")
         return get_player_decision()
     
     def show_card(self, card, is_player):
         """Show a card that was dealt."""
         if is_player:
-            self.player_cards.append(card)
+            # Card already appended to player_cards in game_client.py
             print(f"You drew: {display_card(card)}")
             print(f"Your hand: {show_hand(self.player_cards, is_player=True)}")
         else:
-            self.dealer_cards.append(card)
+            # Card already appended to dealer_cards in game_client.py
             print(f"Dealer drew: {display_card(card)}")
     
     def show_bust(self, is_player):
         """Show bust message."""
         show_bust_message(is_player)
     
-    def show_result(self, result_code):
-        """Show round result."""
-        show_result(result_code)
+    def show_result(self, result_code, player_cards=None, dealer_cards=None):
+        """Show round result with optional hand details."""
+        show_result(result_code, player_cards, dealer_cards)
     
     def show_error(self, msg):
         """Show error message."""

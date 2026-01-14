@@ -121,10 +121,10 @@ class TestPayloadCard:
     """Test card payload encoding/decoding."""
     
     def test_encode_card_size(self):
-        """Test encoded card is 8 bytes (magic + type + rank + suit)."""
+        """Test encoded card is 3 bytes (rank + suit + pad)."""
         msg = encode_payload_card(5, 0)
-        # Format: magic(4) + type(1) + rank(2) + suit(1) = 8 bytes
-        assert len(msg) == 8
+        # Format: rank(1) + suit(1) + pad(1) = 3 bytes (magic+type added by server)
+        assert len(msg) == 3
     
     def test_encode_decode_card(self):
         """Test encoding and decoding a card."""
@@ -141,7 +141,7 @@ class TestPayloadCard:
         for rank in range(1, 14):  # 1-13
             for suit in range(0, 4):  # 0-3
                 msg = encode_payload_card(rank, suit)
-                assert len(msg) == 8
+                assert len(msg) == 3
 
 
 class TestPayloadDecision:
