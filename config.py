@@ -59,6 +59,22 @@ SOCKET_TIMEOUT = 5.0
 # - We know exactly how many bytes to read before parsing next field
 # - No ambiguity if names contain null bytes or special characters
 
+# Magic cookie size: 4 bytes (0xabcddcba as uint32)
+# Packed as big-endian unsigned integer. Fixed size ensures no parsing ambiguity.
+MAGIC_COOKIE_BYTES = 4
+
+# Message type: 1 byte (0x2, 0x3, or 0x4)
+# Fits in a single byte. Easy to extract after magic cookie.
+MESSAGE_TYPE_BYTES = 1
+
+# TCP port number: 2 bytes (uint16)
+# Fits in 2 bytes, supports ports 0-65535. Big-endian encoding in offers.
+TCP_PORT_BYTES = 2
+
+# Round counter: 1 byte (0-255)
+# Max rounds = 255 per spec. Fits in a single byte. Allows up to 255 rounds per session.
+ROUND_BYTES = 1
+
 # Team name: 32 bytes, padded with 0x00 if shorter.
 # Names longer than 32 are truncated. This is fixed-size because:
 #   1. Predictable total message size (must multiply message size by many bytes over network)
